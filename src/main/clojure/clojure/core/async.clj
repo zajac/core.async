@@ -19,7 +19,7 @@ the Java system property `clojure.core.async.pool-size`."
             [clojure.core.async.impl.buffers :as buffers]
             [clojure.core.async.impl.timers :as timers]
             [clojure.core.async.impl.dispatch :as dispatch]
-            [clojure.core.async.impl.ioc-rt :as ioc-rt :refer [fn-handler]]
+            [clojure.core.async.impl.ioc-rt :as ioc-rt]
             [clojure.core.async.impl.mutex :as mutex]
             [clojure.core.async.impl.concurrent :as conc])
   (:import [java.util.concurrent.locks Lock]
@@ -29,6 +29,8 @@ the Java system property `clojure.core.async.pool-size`."
 (alias 'core 'clojure.core)
 
 (set! *warn-on-reflection* false)
+
+(def fn-handler ioc-rt/fn-handler)
 
 (defn buffer
   "Returns a fixed buffer of size n. When full, puts will block/park."
