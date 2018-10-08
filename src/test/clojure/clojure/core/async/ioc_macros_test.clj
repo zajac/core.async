@@ -2,6 +2,7 @@
   (:refer-clojure :exclude [map into reduce transduce merge take partition
                             partition-by])
   (:require [clojure.core.async.impl.ioc-macros :as ioc]
+            [clojure.core.async.impl.ioc-rt :as ioc-rt]
             [clojure.core.async :refer :all :as async]
             [clojure.test :refer :all])
   (:import [java.io FileInputStream ByteArrayOutputStream File]))
@@ -10,7 +11,7 @@
   x)
 
 (defn pause-run [state blk val]
-  (ioc/aset-all! state ioc/STATE-IDX blk ioc/VALUE-IDX val)
+  (ioc-rt/aset-all! state ioc-rt/STATE-IDX blk ioc-rt/VALUE-IDX val)
   :recur)
 
 
@@ -24,11 +25,11 @@
     `(let [captured-bindings# (clojure.lang.Var/getThreadBindingFrame)
            ~@(mapcat (fn [[l sym]] [sym `(^:once fn* [] ~l)]) crossing-env)
            state# (~(ioc/state-machine `(do ~@body) 0 [crossing-env &env] terminators))]
-       (ioc/aset-all! state#
-                  ~ioc/BINDINGS-IDX
+       (ioc-rt/aset-all! state#
+                  ~ioc-rt/BINDINGS-IDX
                   captured-bindings#)
-       (ioc/run-state-machine state#)
-       (ioc/aget-object state# ioc/VALUE-IDX))))
+       (ioc-rt/run-state-machine state#)
+       (ioc-rt/aget-object state# ioc-rt/VALUE-IDX))))
 
 (deftest test-try-catch-finally
   (testing "Don't endlessly loop when exceptions are thrown"

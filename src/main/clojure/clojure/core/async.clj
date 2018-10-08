@@ -19,10 +19,9 @@ the Java system property `clojure.core.async.pool-size`."
             [clojure.core.async.impl.buffers :as buffers]
             [clojure.core.async.impl.timers :as timers]
             [clojure.core.async.impl.dispatch :as dispatch]
-            [clojure.core.async.impl.ioc-macros :as ioc]
+            [clojure.core.async.impl.ioc-rt :as ioc-rt :refer [fn-handler]]
             [clojure.core.async.impl.mutex :as mutex]
-            [clojure.core.async.impl.concurrent :as conc]
-            )
+            [clojure.core.async.impl.concurrent :as conc])
   (:import [java.util.concurrent.locks Lock]
            [java.util.concurrent Executors Executor ThreadLocalRandom]
            [java.util ArrayList]))
@@ -30,21 +29,6 @@ the Java system property `clojure.core.async.pool-size`."
 (alias 'core 'clojure.core)
 
 (set! *warn-on-reflection* false)
-
-(defn fn-handler
-  ([f]
-   (fn-handler f true))
-  ([f blockable]
-   (reify
-     Lock
-     (lock [_])
-     (unlock [_])
-
-     impl/Handler
-     (active? [_] true)
-     (blockable? [_] blockable)
-     (lock-id [_] 0)
-     (commit [_] f))))
 
 (defn buffer
   "Returns a fixed buffer of size n. When full, puts will block/park."
@@ -376,14 +360,14 @@ the Java system property `clojure.core.async.pool-size`."
   (do-alt `alts! clauses))
 
 (defn ioc-alts! [state cont-block ports & {:as opts}]
-  (ioc/aset-all! state ioc/STATE-IDX cont-block)
+  (ioc-rt/aset-all! state ioc-rt/STATE-IDX cont-block)
   (when-let [cb (clojure.core.async/do-alts
                   (fn [val]
-                    (ioc/aset-all! state ioc/VALUE-IDX val)
-                    (ioc/run-state-machine-wrapped state))
+                    (ioc-rt/aset-all! state ioc-rt/VALUE-IDX val)
+                    (ioc-rt/run-state-machine-wrapped state))
                   ports
                   opts)]
-    (ioc/aset-all! state ioc/VALUE-IDX @cb)
+    (ioc-rt/aset-all! state ioc-rt/VALUE-IDX @cb)
     :recur))
 
 (defn offer!
@@ -400,6 +384,11 @@ the Java system property `clojure.core.async.pool-size`."
   (let [ret (impl/take! port (fn-handler nop false))]
     (when ret @ret)))
 
+(def async-custom-terminators {'clojure.core.async/<! `ioc-rt/take!
+                               'clojure.core.async/>! `ioc-rt/put!
+                               'clojure.core.async/alts! `ioc-alts!
+                               :Return `ioc-rt/return-chan})
+
 (defmacro go
   "Asynchronously executes the body, returning immediately to the
   calling thread. Additionally, any visible calls to <!, >! and alt!/alts!
@@ -411,21 +400,25 @@ the Java system property `clojure.core.async.pool-size`."
   Returns a channel which will receive the result of the body when
   completed"
   [& body]
-  (let [crossing-env (zipmap (keys &env) (repeatedly gensym))]
+  (require 'clojure.core.async.impl.ioc-macros)
+  (let [crossing-env (zipmap (keys &env) (repeatedly gensym))
+        make-state-machine (resolve 'clojure.core.async.impl.ioc-macros/state-machine)
+        state-machine (make-state-machine `(do ~@body) 1 [crossing-env &env] async-custom-terminators)]
     `(let [c# (chan 1)
            captured-bindings# (clojure.lang.Var/getThreadBindingFrame)]
        (dispatch/run
          (^:once fn* []
           (let [~@(mapcat (fn [[l sym]] [sym `(^:once fn* [] ~(vary-meta l dissoc :tag))]) crossing-env)
-                f# ~(ioc/state-machine `(do ~@body) 1 [crossing-env &env] ioc/async-custom-terminators)
+                f# ~state-machine
                 state# (-> (f#)
-                           (ioc/aset-all! ioc/USER-START-IDX c#
-                                          ioc/BINDINGS-IDX captured-bindings#))]
-            (ioc/run-state-machine-wrapped state#))))
+                           (ioc-rt/aset-all! ioc-rt/USER-START-IDX c#
+                                             ioc-rt/BINDINGS-IDX captured-bindings#))]
+            (ioc-rt/run-state-machine-wrapped state#))))
        c#)))
 
-(defonce ^:private ^Executor thread-macro-executor
-  (Executors/newCachedThreadPool (conc/counted-thread-factory "async-thread-macro-%d" true)))
+(defonce ^:private thread-macro-executor
+  (delay
+    (Executors/newCachedThreadPool (conc/counted-thread-factory "async-thread-macro-%d" true))))
 
 (defn thread-call
   "Executes f in another thread, returning immediately to the calling
@@ -434,7 +427,7 @@ the Java system property `clojure.core.async.pool-size`."
   [f]
   (let [c (chan 1)]
     (let [binds (clojure.lang.Var/getThreadBindingFrame)]
-      (.execute thread-macro-executor
+      (.execute ^Executor @thread-macro-executor
                 (fn []
                   (clojure.lang.Var/resetThreadBindingFrame binds)
                   (try
