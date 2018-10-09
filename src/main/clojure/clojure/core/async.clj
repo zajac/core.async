@@ -418,9 +418,8 @@ the Java system property `clojure.core.async.pool-size`."
             (ioc-rt/run-state-machine-wrapped state#))))
        c#)))
 
-(defonce ^:private thread-macro-executor
-  (delay
-    (Executors/newCachedThreadPool (conc/counted-thread-factory "async-thread-macro-%d" true))))
+(defonce ^:private ^Executor thread-macro-executor
+  (Executors/newCachedThreadPool (conc/counted-thread-factory "async-thread-macro-%d" true)))
 
 (defn thread-call
   "Executes f in another thread, returning immediately to the calling
@@ -429,7 +428,7 @@ the Java system property `clojure.core.async.pool-size`."
   [f]
   (let [c (chan 1)]
     (let [binds (clojure.lang.Var/getThreadBindingFrame)]
-      (.execute ^Executor @thread-macro-executor
+      (.execute thread-macro-executor
                 (fn []
                   (clojure.lang.Var/resetThreadBindingFrame binds)
                   (try
